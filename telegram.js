@@ -22,12 +22,15 @@ function downloadTelegramFile(fileId) {
   // 2단계: 파일 바이트 다운로드
   const fileUrl = TELEGRAM_BASE + '/file/bot' + token + '/' + file.file_path;
   const fileRes = UrlFetchApp.fetch(fileUrl, { muteHttpExceptions: true });
+  if (fileRes.getResponseCode() !== 200) {
+    throw new Error('File download failed: HTTP ' + fileRes.getResponseCode());
+  }
   return fileRes.getBlob();
 }
 
 function sendReaction(chatId, messageId) {
   const token = getConfig('TELEGRAM_TOKEN');
-  UrlFetchApp.fetch(
+  const res = UrlFetchApp.fetch(
     TELEGRAM_BASE + '/bot' + token + '/setMessageReaction',
     {
       method: 'post',
@@ -40,6 +43,10 @@ function sendReaction(chatId, messageId) {
       muteHttpExceptions: true
     }
   );
+  const data = JSON.parse(res.getContentText());
+  if (!data.ok) {
+    throw new Error('setMessageReaction failed: ' + data.description);
+  }
 }
 
 function sendAdminError(text) {

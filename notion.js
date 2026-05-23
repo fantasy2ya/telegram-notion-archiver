@@ -17,24 +17,23 @@ function createFileUpload(filename, mimeType) {
     muteHttpExceptions: true
   });
   const data = JSON.parse(res.getContentText());
-  if (!data.id) {
+  if (!data.id || data.object === 'error') {
     throw new Error('createFileUpload failed: ' + res.getContentText());
   }
   return { id: data.id, uploadUrl: data.upload_url };
 }
 
 function sendFileUpload(uploadUrl, blob) {
-  const token = getConfig('NOTION_TOKEN');
+  // notionHeaders()에서 Content-Type을 제거해 GAS가 multipart/form-data를 자동 설정하게 함
+  const headers = notionHeaders();
+  delete headers['Content-Type'];
   const res = UrlFetchApp.fetch(uploadUrl + '/send', {
     method: 'post',
-    headers: {
-      'Authorization': 'Bearer ' + token,
-      'Notion-Version': NOTION_VERSION
-    },
-    payload: { 'file': blob },  // Blob을 payload에 넣으면 GAS가 자동으로 multipart/form-data 처리
+    headers: headers,
+    payload: { 'file': blob },
     muteHttpExceptions: true
   });
-  if (res.getResponseCode() >= 300) {
+  if (res.getResponseCode() < 200 || res.getResponseCode() >= 300) {
     throw new Error('sendFileUpload failed (' + res.getResponseCode() + '): ' + res.getContentText());
   }
   return JSON.parse(res.getContentText());
@@ -77,7 +76,7 @@ function createNotionPage(meta, fileUploadId) {
   });
 
   const data = JSON.parse(res.getContentText());
-  if (!data.id) {
+  if (!data.id || data.object === 'error') {
     throw new Error('createNotionPage failed: ' + res.getContentText());
   }
   return data;

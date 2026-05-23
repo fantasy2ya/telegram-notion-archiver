@@ -20,8 +20,21 @@ jobs:
 
       - name: Restore clasp credentials
         env:
-          CLASP_TOKEN: ${{ secrets.CLASP_TOKEN }}
-        run: printf '%s' "$CLASP_TOKEN" > ~/.clasprc.json
+          REFRESH_TOKEN: ${{ secrets.CLASP_REFRESH_TOKEN }}
+          CLIENT_ID: ${{ secrets.CLASP_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CLASP_CLIENT_SECRET }}
+        run: |
+          python3 -c "
+          import json, os
+          data = {'tokens': {'default': {
+            'client_id': os.environ['CLIENT_ID'],
+            'client_secret': os.environ['CLIENT_SECRET'],
+            'type': 'authorized_user',
+            'refresh_token': os.environ['REFRESH_TOKEN']
+          }}}
+          with open(os.path.expanduser('~/.clasprc.json'), 'w') as f:
+            json.dump(data, f)
+          "
 
       - name: Create .clasp.json
         env:

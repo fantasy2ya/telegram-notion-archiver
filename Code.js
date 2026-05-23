@@ -45,8 +45,12 @@ function doPost(e) {
       return ContentService.createTextOutput('ok');
     }
 
-    // 성공 👍 리액션
-    sendReaction(chatId, msgId);
+    // 성공 👍 리액션 (실패해도 Notion 저장은 완료됐으므로 admin에게 경고만)
+    try {
+      sendReaction(chatId, msgId);
+    } catch (err) {
+      sendAdminError('⚠️ 리액션 추가 실패 (Notion 저장은 완료됨): ' + err.message);
+    }
 
   } catch (err) {
     sendAdminError('❌ 알 수 없는 오류: ' + err.message);

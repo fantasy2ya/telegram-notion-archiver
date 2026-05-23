@@ -58,3 +58,34 @@ function testNotionFullUpload() {
     console.error('❌ FAIL:', e.message);
   }
 }
+
+function testDoPostMock() {
+  // 실제 파일 전송 없이 doPost 흐름을 테스트하려면
+  // 실제 텔레그램 bot에서 파일을 보낸 뒤 getUpdates로 file_id를 얻어 아래에 입력.
+  // file_id는 텔레그램 서버에 24시간 캐시되므로 신선한 값 사용.
+  const REAL_FILE_ID = 'REPLACE_ME'; // 실제 file_id로 교체
+
+  const mockEvent = {
+    postData: {
+      contents: JSON.stringify({
+        message: {
+          message_id: 999,
+          from: { first_name: '테스트', last_name: '유저' },
+          chat: { id: Number(getConfig('ADMIN_CHAT_ID')) },
+          date: Math.floor(Date.now() / 1000),
+          caption: 'RWA: 모의 테스트 회의',
+          document: {
+            file_id: REAL_FILE_ID,
+            file_name: 'mock-test.pdf',
+            mime_type: 'application/pdf',
+            file_size: 1024
+          }
+        }
+      })
+    }
+  };
+
+  const result = doPost(mockEvent);
+  console.log('doPost result:', result.getContent());
+  console.log('Notion DB와 텔레그램 관리자 채팅에서 결과 확인.');
+}

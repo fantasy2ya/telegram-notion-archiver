@@ -59,6 +59,67 @@ function testNotionFullUpload() {
   }
 }
 
+function deleteWebhook() {
+  const token = getConfig('TELEGRAM_TOKEN');
+  const res = UrlFetchApp.fetch(
+    'https://api.telegram.org/bot' + token + '/deleteWebhook',
+    { muteHttpExceptions: true }
+  );
+  const data = JSON.parse(res.getContentText());
+  console.log(data.ok ? '✅ Webhook 삭제 완료' : '❌ 실패: ' + data.description);
+}
+
+function setupTrigger() {
+  ScriptApp.getProjectTriggers().forEach(function(t) {
+    if (t.getHandlerFunction() === 'pollUpdates') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('pollUpdates').timeBased().everyMinutes(1).create();
+  console.log('✅ 1분마다 pollUpdates 트리거 설정 완료');
+}
+
+function deleteTrigger() {
+  ScriptApp.getProjectTriggers().forEach(function(t) {
+    if (t.getHandlerFunction() === 'pollUpdates') ScriptApp.deleteTrigger(t);
+  });
+  console.log('✅ pollUpdates 트리거 삭제 완료');
+}
+
+function setupWebhook() {
+  const token = getConfig('TELEGRAM_TOKEN');
+  const webhookUrl = 'https://script.google.com/macros/s/AKfycbx62qh2JlhRhVn3S3pfRjaKH6HSPiyEn48FEsqsdHd3AWkv7Lw612NDbvA65zEdUYZ0/exec';
+  const res = UrlFetchApp.fetch(
+    'https://api.telegram.org/bot' + token + '/setWebhook?url=' + encodeURIComponent(webhookUrl),
+    { muteHttpExceptions: true }
+  );
+  const data = JSON.parse(res.getContentText());
+  console.log(data.ok ? '✅ Webhook 등록 완료' : '❌ 실패: ' + data.description);
+  console.log(res.getContentText());
+}
+
+function checkWebhook() {
+  const token = getConfig('TELEGRAM_TOKEN');
+  const res = UrlFetchApp.fetch(
+    'https://api.telegram.org/bot' + token + '/getWebhookInfo',
+    { muteHttpExceptions: true }
+  );
+  console.log(res.getContentText());
+}
+
+function testWebhookPost() {
+  const url = 'https://script.google.com/macros/s/AKfycbx62qh2JlhRhVn3S3pfRjaKH6HSPiyEn48FEsqsdHd3AWkv7Lw612NDbvA65zEdUYZ0/exec';
+  const res = UrlFetchApp.fetch(url, {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify({ test: true }),
+    muteHttpExceptions: true,
+    followRedirects: false
+  });
+  console.log('HTTP status:', res.getResponseCode());
+  const headers = res.getAllHeaders();
+  console.log('Location:', headers['Location'] || headers['location'] || 'none');
+  console.log('Response:', res.getContentText().substring(0, 300));
+}
+
 function testDoPostMock() {
   // 실제 파일 전송 없이 doPost 흐름을 테스트하려면
   // 실제 텔레그램 bot에서 파일을 보낸 뒤 getUpdates로 file_id를 얻어 아래에 입력.

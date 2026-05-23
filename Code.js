@@ -1,62 +1,78 @@
-function doPost(e) {
-  try {
-    const body = JSON.parse(e.postData.contents);
-    const msg = body.message || body.channel_post;
+function pollUpdates() {
+  const token = getConfig('TELEGRAM_TOKEN');
+  const props = PropertiesService.getScriptProperties();
+  const offset = Number(props.getProperty('TG_OFFSET') || '0');
 
-    // document 없는 메시지(텍스트만, 사진 등)는 조용히 무시
-    if (!msg || !msg.document) {
-      return ContentService.createTextOutput('ok');
-    }
-
-    const doc      = msg.document;
-    const chatId   = msg.chat.id;
-    const msgId    = msg.message_id;
-    const caption  = msg.caption || '';
-    const sender   = buildSender(msg.from);
-    const dateIso  = new Date(msg.date * 1000).toISOString().split('T')[0];
-    const filename = doc.file_name || 'untitled';
-    const mimeType = doc.mime_type || 'application/octet-stream';
-
-    const parsed   = parseCaption(caption);
-    const title    = parsed.title || filename;
-    const category = parsed.category;
-
-    // Telegram 파일 다운로드
-    let blob;
-    try {
-      blob = downloadTelegramFile(doc.file_id);
-      blob = blob.setName(filename).setContentType(mimeType);
-    } catch (err) {
-      if (err.message.startsWith('FILE_TOO_LARGE:')) {
-        sendAdminError('❌ 파일이 너무 큽니다 (50MB 제한): ' + err.message.replace('FILE_TOO_LARGE:', ''));
-      } else {
-        sendAdminError('❌ Telegram 파일 다운로드 실패: ' + err.message);
-      }
-      return ContentService.createTextOutput('ok');
-    }
-
-    // Notion 업로드
-    try {
-      const upload = createFileUpload(filename, mimeType);
-      sendFileUpload(upload.uploadUrl, blob);
-      createNotionPage({ title, category, sender, dateIso }, upload.id);
-    } catch (err) {
-      sendAdminError('❌ Notion 업로드 실패: ' + err.message);
-      return ContentService.createTextOutput('ok');
-    }
-
-    // 성공 👍 리액션 (실패해도 Notion 저장은 완료됐으므로 admin에게 경고만)
-    try {
-      sendReaction(chatId, msgId);
-    } catch (err) {
-      sendAdminError('⚠️ 리액션 추가 실패 (Notion 저장은 완료됨): ' + err.message);
-    }
-
-  } catch (err) {
-    sendAdminError('❌ 알 수 없는 오류: ' + err.message);
+  const res = UrlFetchApp.fetch(
+    'https://api.telegram.org/bot' + token +
+    '/getUpdates?offset=' + offset + '&limit=100&timeout=0',
+    { muteHttpExceptions: true }
+  );
+  const data = JSON.parse(res.getContentText());
+  if (!data.ok) {
+    console.error('getUpdates failed:', data.description);
+    return;
   }
 
-  return ContentService.createTextOutput('ok');
+  const updates = data.result;
+  if (updates.length === 0) return;
+
+  updates.forEach(function(update) {
+    const msg = update.message || update.channel_post;
+    if (msg && msg.document) {
+      try {
+        processMessage(msg);
+      } catch (err) {
+        sendAdminError('❌ update ' + update.update_id + ' 처리 실패: ' + err.message);
+      }
+    }
+  });
+
+  const lastId = updates[updates.length - 1].update_id;
+  props.setProperty('TG_OFFSET', String(lastId + 1));
+}
+
+function processMessage(msg) {
+  const doc      = msg.document;
+  const chatId   = msg.chat.id;
+  const msgId    = msg.message_id;
+  const caption  = msg.caption || '';
+  const sender   = buildSender(msg.from);
+  const dateIso  = new Date(msg.date * 1000).toISOString().split('T')[0];
+  const filename = doc.file_name || 'untitled';
+  const mimeType = doc.mime_type || 'application/octet-stream';
+
+  const parsed   = parseCaption(caption);
+  const title    = parsed.title || filename;
+  const category = parsed.category;
+
+  let blob;
+  try {
+    blob = downloadTelegramFile(doc.file_id);
+    blob = blob.setName(filename).setContentType(mimeType);
+  } catch (err) {
+    if (err.message.startsWith('FILE_TOO_LARGE:')) {
+      sendAdminError('❌ 파일이 너무 큽니다 (50MB 제한): ' + err.message.replace('FILE_TOO_LARGE:', ''));
+    } else {
+      sendAdminError('❌ Telegram 파일 다운로드 실패: ' + err.message);
+    }
+    return;
+  }
+
+  try {
+    const upload = createFileUpload(filename, mimeType);
+    sendFileUpload(upload.id, blob);
+    createNotionPage({ title, category, sender, dateIso }, upload.id);
+  } catch (err) {
+    sendAdminError('❌ Notion 업로드 실패: ' + err.message);
+    return;
+  }
+
+  try {
+    sendReaction(chatId, msgId);
+  } catch (err) {
+    sendAdminError('⚠️ 리액션 추가 실패 (Notion 저장은 완료됨): ' + err.message);
+  }
 }
 
 function buildSender(from) {

@@ -23,11 +23,11 @@ function createFileUpload(filename, mimeType) {
   return { id: data.id, uploadUrl: data.upload_url };
 }
 
-function sendFileUpload(uploadUrl, blob) {
-  // notionHeaders()에서 Content-Type을 제거해 GAS가 multipart/form-data를 자동 설정하게 함
+function sendFileUpload(fileUploadId, blob) {
+  const sendUrl = NOTION_API + '/file_uploads/' + fileUploadId + '/send';
   const headers = notionHeaders();
   delete headers['Content-Type'];
-  const res = UrlFetchApp.fetch(uploadUrl + '/send', {
+  const res = UrlFetchApp.fetch(sendUrl, {
     method: 'post',
     headers: headers,
     payload: { 'file': blob },

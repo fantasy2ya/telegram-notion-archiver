@@ -13,3 +13,4 @@ function parseCaption(text) {
     title: text.slice(idx + 1).trim()
   };
 }
+

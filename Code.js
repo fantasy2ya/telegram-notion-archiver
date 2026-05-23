@@ -43,7 +43,7 @@ function processMessage(msg) {
   const mimeType = doc.mime_type || 'application/octet-stream';
 
   const parsed   = parseCaption(caption);
-  const title    = parsed.title || filename;
+  const title    = filename;
   const category = parsed.category;
 
   let blob;

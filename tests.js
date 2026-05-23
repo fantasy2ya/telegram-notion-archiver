@@ -21,3 +21,9 @@ function testParseCaption() {
   });
   console.log(passed + '/' + cases.length + ' passed');
 }
+
+function testSendAdminError() {
+  // 실제로 관리자 채팅에 테스트 메시지가 전송됨
+  sendAdminError('🧪 테스트: sendAdminError 정상 작동 확인');
+  console.log('메시지 전송 완료 — 관리자 텔레그램 앱에서 확인하세요');
+}

@@ -48,6 +48,16 @@ function processMessage(msg) {
   const forwardChatTitle = buildForwardChatTitle(msg);
   const category = isForwarded ? detectForwardedCategory(buildForwardText(msg, caption), forwardChatTitle) : parsed.category;
 
+  // Notion 무료 플랜 5MB 한도 사전 차단 — 다운로드/업로드 헛수고 없이 명확히 거부.
+  const fileSize = doc.file_size || 0;
+  if (fileSize > NOTION_MAX_FILE_BYTES) {
+    const mb = (fileSize / 1024 / 1024).toFixed(2);
+    console.error('SIZE LIMIT:', filename, mb + 'MB');
+    sendAdminError('❌ Notion 무료 플랜 5MB 초과로 업로드 불가 (' + mb + 'MB): ' + filename);
+    sendThumbsDown(chatId, msgId);
+    return;
+  }
+
   let blob;
   try {
     blob = downloadTelegramFile(doc.file_id);

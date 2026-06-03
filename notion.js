@@ -1,6 +1,9 @@
 const NOTION_API = 'https://api.notion.com/v1';
 const NOTION_VERSION = '2022-06-28';
 
+// Notion 무료 플랜 파일 업로드 한도 (파일당 5 MiB). 초과 시 페이지 생성이 거부됨.
+const NOTION_MAX_FILE_BYTES = 5 * 1024 * 1024;
+
 function notionHeaders() {
   return {
     'Authorization': 'Bearer ' + getConfig('NOTION_TOKEN'),

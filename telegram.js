@@ -70,11 +70,12 @@ function sendThumbsDown(chatId, messageId) {
   }
 }
 
+// 관리자 DM 전송. 성공 true / 실패 false 반환 + 실패 사유 로깅.
 function sendAdminError(text) {
   try {
     const token = getConfig('TELEGRAM_TOKEN');
     const adminChatId = getConfig('ADMIN_CHAT_ID');
-    UrlFetchApp.fetch(
+    const res = UrlFetchApp.fetch(
       TELEGRAM_BASE + '/bot' + token + '/sendMessage',
       {
         method: 'post',
@@ -86,7 +87,41 @@ function sendAdminError(text) {
         muteHttpExceptions: true
       }
     );
+    const data = JSON.parse(res.getContentText());
+    if (!data.ok) {
+      console.error('sendAdminError failed (Telegram ' + data.error_code + '):', data.description);
+      return false;
+    }
+    return true;
   } catch (e) {
     console.error('sendAdminError itself failed:', e.message);
+    return false;
+  }
+}
+
+// 특정 채팅에 메시지 전송(선택적으로 답글). DM이 막힐 때의 fallback 경로.
+function sendChatMessage(chatId, text, replyToMsgId) {
+  try {
+    const token = getConfig('TELEGRAM_TOKEN');
+    const payload = { chat_id: chatId, text: text };
+    if (replyToMsgId) payload.reply_to_message_id = replyToMsgId;
+    const res = UrlFetchApp.fetch(
+      TELEGRAM_BASE + '/bot' + token + '/sendMessage',
+      {
+        method: 'post',
+        contentType: 'application/json',
+        payload: JSON.stringify(payload),
+        muteHttpExceptions: true
+      }
+    );
+    const data = JSON.parse(res.getContentText());
+    if (!data.ok) {
+      console.error('sendChatMessage failed (Telegram ' + data.error_code + '):', data.description);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.error('sendChatMessage failed:', e.message);
+    return false;
   }
 }

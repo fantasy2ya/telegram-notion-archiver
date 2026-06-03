@@ -53,8 +53,7 @@ function processMessage(msg) {
   if (fileSize > NOTION_MAX_FILE_BYTES) {
     const mb = (fileSize / 1024 / 1024).toFixed(2);
     console.error('SIZE LIMIT:', filename, mb + 'MB');
-    sendAdminError('❌ Notion 무료 플랜 5MB 초과로 업로드 불가 (' + mb + 'MB): ' + filename);
-    sendThumbsDown(chatId, msgId);
+    notifyFailure(chatId, msgId, '❌ Notion 무료 플랜 5MB 초과로 업로드 불가 (' + mb + 'MB): ' + filename);
     return;
   }
 
@@ -64,12 +63,10 @@ function processMessage(msg) {
     blob = blob.setName(filename).setContentType(mimeType);
   } catch (err) {
     console.error('Download FAIL:', err.message);
-    if (err.message.startsWith('FILE_TOO_LARGE:')) {
-      sendAdminError('❌ 파일이 너무 큽니다 (50MB 제한): ' + err.message.replace('FILE_TOO_LARGE:', ''));
-    } else {
-      sendAdminError('❌ Telegram 파일 다운로드 실패: ' + err.message);
-    }
-    sendThumbsDown(chatId, msgId);
+    const msgText = err.message.startsWith('FILE_TOO_LARGE:')
+      ? '❌ 파일이 너무 큽니다: ' + err.message.replace('FILE_TOO_LARGE:', '')
+      : '❌ Telegram 파일 다운로드 실패: ' + err.message;
+    notifyFailure(chatId, msgId, msgText);
     return;
   }
 
@@ -79,8 +76,7 @@ function processMessage(msg) {
     createNotionPage({ title, category, sender, dateIso, caption }, upload.id);
   } catch (err) {
     console.error('Notion FAIL:', err.message);
-    sendAdminError('❌ Notion 업로드 실패: ' + err.message);
-    sendThumbsDown(chatId, msgId);
+    notifyFailure(chatId, msgId, '❌ Notion 업로드 실패: ' + err.message);
     return;
   }
 
@@ -95,6 +91,17 @@ function buildSender(from) {
   if (!from) return '알 수 없음';
   const name = [from.first_name, from.last_name].filter(Boolean).join(' ');
   return name || from.username || '알 수 없음';
+}
+
+// 실패 알림: 👎 리액션 + 관리자 DM 시도. DM이 막히면(미설정/未 /start 등)
+// 파일을 보낸 그 채팅에 답글로 fallback 하여 사용자가 반드시 사유를 보게 한다.
+function notifyFailure(chatId, msgId, text) {
+  sendThumbsDown(chatId, msgId);
+  const dmOk = sendAdminError(text);
+  if (!dmOk) {
+    console.warn('관리자 DM 실패 → 원본 채팅에 답글로 알림');
+    sendChatMessage(chatId, text, msgId);
+  }
 }
 
 function buildForwardChatTitle(msg) {

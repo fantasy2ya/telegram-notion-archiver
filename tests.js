@@ -22,6 +22,65 @@ function testParseCaption() {
   console.log(passed + '/' + cases.length + ' passed');
 }
 
+function testDetectForwardedCategory() {
+  // { text, chatTitle, expected } 형식
+  var cases = [
+    // 채널명 정확 매칭 — 디지털에셋사업팀
+    { text: '',                        chatTitle: '디지털에셋사업팀', expected: '자산운용' },
+    { text: '첨부파일입니다',           chatTitle: '디지털에셋사업팀', expected: '자산운용' },
+    // 채널명/텍스트에 자산운용
+    { text: ' 한화자산운용',            chatTitle: '',               expected: '자산운용' },
+    { text: '자산운용 월간 뉴스레터',   chatTitle: '',               expected: '자산운용' },
+    // 채널명/텍스트에 증권
+    { text: ' 한화투자증권',            chatTitle: '',               expected: '투자증권' },
+    { text: ' KB증권',                  chatTitle: '',               expected: '투자증권' },
+    // 둘 다 없음
+    { text: '기타 첨부파일',            chatTitle: '기획팀',          expected: '' },
+    { text: '',                         chatTitle: '',               expected: '' },
+  ];
+
+  var passed = 0;
+  cases.forEach(function(tc, i) {
+    var result = detectForwardedCategory(tc.text, tc.chatTitle);
+    var ok = result === tc.expected;
+    console.log(
+      'Case ' + (i + 1) + ': ' + (ok ? '✅ PASS' : '❌ FAIL') +
+      ' | text: ' + JSON.stringify(tc.text) + ' chatTitle: ' + JSON.stringify(tc.chatTitle) +
+      ' | expected: ' + JSON.stringify(tc.expected) +
+      ' | got: ' + JSON.stringify(result)
+    );
+    if (ok) passed++;
+  });
+  console.log(passed + '/' + cases.length + ' passed');
+}
+
+function testSanitizeSelectName() {
+  var cases = [
+    { input: 'RWA',                          expected: 'RWA' },
+    { input: '자산운용, 증권',                expected: '자산운용 증권' },      // 쉼표 → 공백
+    { input: '오후 2',                        expected: '오후 2' },
+    { input: '회의\n자료',                    expected: '회의 자료' },          // 줄바꿈 → 공백
+    { input: '  앞뒤  공백  ',                expected: '앞뒤 공백' },
+    { input: '',                              expected: '' },
+    { input: null,                            expected: '' },
+    { input: 'x'.repeat(150),                 expected: 'x'.repeat(100) },       // 길이 컷
+  ];
+
+  var passed = 0;
+  cases.forEach(function(tc, i) {
+    var result = sanitizeSelectName(tc.input);
+    var ok = result === tc.expected;
+    console.log(
+      'Case ' + (i + 1) + ': ' + (ok ? '✅ PASS' : '❌ FAIL') +
+      ' | input: ' + JSON.stringify(tc.input) +
+      ' | expected: ' + JSON.stringify(tc.expected) +
+      ' | got: ' + JSON.stringify(result)
+    );
+    if (ok) passed++;
+  });
+  console.log(passed + '/' + cases.length + ' passed');
+}
+
 function testSendAdminError() {
   // 실제로 관리자 채팅에 테스트 메시지가 전송됨
   sendAdminError('🧪 테스트: sendAdminError 정상 작동 확인');
@@ -39,7 +98,7 @@ function testNotionFullUpload() {
     console.log('✅ upload.id:', upload.id);
 
     console.log('2단계: sendFileUpload 호출...');
-    sendFileUpload(upload.uploadUrl, blob);
+    sendFileUpload(upload.id, blob);
     console.log('✅ 파일 업로드 완료');
 
     console.log('3단계: createNotionPage 호출...');
@@ -57,6 +116,24 @@ function testNotionFullUpload() {
   } catch (e) {
     console.error('❌ FAIL:', e.message);
   }
+}
+
+function resetOffset() {
+  const token = getConfig('TELEGRAM_TOKEN');
+  // 현재 pending 업데이트를 모두 consume해서 offset을 최신으로 이동
+  const res = UrlFetchApp.fetch(
+    'https://api.telegram.org/bot' + token + '/getUpdates?limit=100&timeout=0',
+    { muteHttpExceptions: true }
+  );
+  const data = JSON.parse(res.getContentText());
+  const updates = data.result;
+  if (updates.length === 0) {
+    console.log('✅ 대기 중인 업데이트 없음, offset 유지');
+    return;
+  }
+  const newOffset = updates[updates.length - 1].update_id + 1;
+  PropertiesService.getScriptProperties().setProperty('TG_OFFSET', String(newOffset));
+  console.log('✅ TG_OFFSET 초기화 완료:', newOffset, '(', updates.length, '개 업데이트 스킵)');
 }
 
 function deleteWebhook() {

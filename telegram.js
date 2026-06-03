@@ -49,6 +49,27 @@ function sendReaction(chatId, messageId) {
   }
 }
 
+function sendThumbsDown(chatId, messageId) {
+  try {
+    const token = getConfig('TELEGRAM_TOKEN');
+    UrlFetchApp.fetch(
+      TELEGRAM_BASE + '/bot' + token + '/setMessageReaction',
+      {
+        method: 'post',
+        contentType: 'application/json',
+        payload: JSON.stringify({
+          chat_id: chatId,
+          message_id: messageId,
+          reaction: [{ type: 'emoji', emoji: '👎' }]
+        }),
+        muteHttpExceptions: true
+      }
+    );
+  } catch (e) {
+    console.error('sendThumbsDown failed:', e.message);
+  }
+}
+
 function sendAdminError(text) {
   try {
     const token = getConfig('TELEGRAM_TOKEN');

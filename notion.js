@@ -39,8 +39,27 @@ function sendFileUpload(fileUploadId, blob) {
   return JSON.parse(res.getContentText());
 }
 
+// DB의 실제 속성명→타입 맵을 반환. 존재하지 않는 속성에 쓰면 Notion이
+// 페이지 생성 전체를 거부하므로, 전송 전 필터링에 사용한다.
+function getNotionDbProperties(dbId) {
+  const res = UrlFetchApp.fetch(NOTION_API + '/databases/' + dbId, {
+    method: 'get',
+    headers: notionHeaders(),
+    muteHttpExceptions: true
+  });
+  const data = JSON.parse(res.getContentText());
+  if (data.object === 'error' || !data.properties) {
+    throw new Error('getNotionDbProperties failed: ' + res.getContentText());
+  }
+  const map = {};
+  Object.keys(data.properties).forEach(function(name) {
+    map[name] = data.properties[name].type;
+  });
+  return map;
+}
+
 function createNotionPage(meta, fileUploadId) {
-  // meta: { title, category, sender, dateIso }
+  // meta: { title, category, sender, dateIso, caption }
   const dbId = getConfig('NOTION_DB_ID');
 
   const properties = {
@@ -61,8 +80,29 @@ function createNotionPage(meta, fileUploadId) {
     }
   };
 
-  if (meta.category) {
-    properties['카테고리'] = { select: { name: meta.category } };
+  const category = sanitizeSelectName(meta.category);
+  if (category) {
+    properties['카테고리'] = { select: { name: category } };
+  }
+
+  if (meta.caption) {
+    properties['캡션'] = {
+      rich_text: [{ text: { content: meta.caption.slice(0, 2000) } }]
+    };
+  }
+
+  // DB에 실제로 존재하는 속성만 남긴다 (캡션/카테고리 컬럼이 없어도 업로드 보존).
+  // 스키마 조회 실패 시에는 기존 동작대로 전부 전송 (가용성 우선).
+  try {
+    const dbProps = getNotionDbProperties(dbId);
+    Object.keys(properties).forEach(function(name) {
+      if (!(name in dbProps)) {
+        delete properties[name];
+        console.warn('Notion DB에 없는 속성 스킵: ' + name);
+      }
+    });
+  } catch (e) {
+    console.warn('DB 스키마 조회 실패, 전체 속성 전송 fallback: ' + e.message);
   }
 
   const res = UrlFetchApp.fetch(NOTION_API + '/pages', {

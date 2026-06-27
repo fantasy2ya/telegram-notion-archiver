@@ -1,4 +1,16 @@
+// 트리거가 호출하는 엔트리. 절대 uncaught 예외를 던지지 않는다 —
+// GAS는 트리거 실행이 반복 실패하면 트리거를 자동 정지/비활성화하므로,
+// 어떤 오류도 여기서 삼켜(로그+관리자 DM) 트리거 수명을 보호한다.
 function pollUpdates() {
+  try {
+    pollUpdatesOnce();
+  } catch (err) {
+    console.error('pollUpdates fatal (삼킴):', err && err.message);
+    try { sendAdminError('❌ pollUpdates 치명적 오류(트리거 보호용으로 삼킴): ' + (err && err.message)); } catch (e) {}
+  }
+}
+
+function pollUpdatesOnce() {
   const token = getConfig('TELEGRAM_TOKEN');
   const props = PropertiesService.getScriptProperties();
   const offset = Number(props.getProperty('TG_OFFSET') || '0');
@@ -30,6 +42,54 @@ function pollUpdates() {
 
   const lastId = updates[updates.length - 1].update_id;
   props.setProperty('TG_OFFSET', String(lastId + 1));
+}
+
+// === 트리거 자가복구 ==========================================================
+// 최초 1회 GAS 편집기에서 installTriggers() 실행 → 1분 폴링 + 일일 watchdog 설치.
+function installTriggers() {
+  ensurePollTrigger();
+  ensureWatchdogTrigger();
+  console.log('✅ 트리거 설치 완료: ' + describeTriggers());
+}
+
+// pollUpdates용 1분 CLOCK 트리거가 정확히 1개 있도록 보장(없으면 생성, 중복이면 정리).
+function ensurePollTrigger() {
+  var existing = ScriptApp.getProjectTriggers().filter(function (t) {
+    return t.getHandlerFunction() === 'pollUpdates';
+  });
+  if (existing.length === 0) {
+    ScriptApp.newTrigger('pollUpdates').timeBased().everyMinutes(1).create();
+    console.log('🔧 pollUpdates 1분 트리거 생성');
+    return;
+  }
+  // 중복 제거(1개만 유지) — 누적 시 쿼터/오류 위험.
+  for (var i = 1; i < existing.length; i++) ScriptApp.deleteTrigger(existing[i]);
+}
+
+// pollUpdates 트리거가 사라져도 되살리는 감시 트리거. 거의 아무 일도 안 하므로
+// 자체 오류가 쌓이지 않아 살아남고, 1분 트리거를 재생성한다.
+function ensureWatchdogTrigger() {
+  var has = ScriptApp.getProjectTriggers().some(function (t) {
+    return t.getHandlerFunction() === 'triggerWatchdog';
+  });
+  if (!has) {
+    ScriptApp.newTrigger('triggerWatchdog').timeBased().everyHours(1).create();
+    console.log('🔧 watchdog 1시간 트리거 생성');
+  }
+}
+
+function triggerWatchdog() {
+  try {
+    ensurePollTrigger();
+  } catch (err) {
+    console.error('watchdog 실패:', err && err.message);
+  }
+}
+
+function describeTriggers() {
+  return ScriptApp.getProjectTriggers().map(function (t) {
+    return t.getHandlerFunction();
+  }).join(', ') || '(none)';
 }
 
 function processMessage(msg) {

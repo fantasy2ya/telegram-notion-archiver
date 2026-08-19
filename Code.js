@@ -1,6 +1,88 @@
+// === 웹훅 진입점 (폴링 대체) ================================================
+// Telegram이 업데이트를 이 웹앱으로 POST한다. 트리거 런타임을 전혀 쓰지 않으므로
+// 무료 GAS 90분/일 트리거 쿼터 문제를 근본적으로 회피한다.
+// 웹앱은 반드시 access=ANYONE_ANONYMOUS로 배포되어야 함(텔레그램은 구글 미로그인).
+// 하나의 텔레그램 update를 처리한다. doPost(직접 POST)와 doGet(프록시 GET+쿼리) 공용.
+function handleUpdate_(update) {
+  if (!update) return { ok: true };
+
+  // 중복 배달 방지: 응답이 느리면 텔레그램/프록시가 같은 update를 재전송한다.
+  // 처리 시작 전에 update_id를 6시간 캐시에 기록해 두 번 처리하지 않는다.
+  var cache = CacheService.getScriptCache();
+  var key = 'tgupd_' + update.update_id;
+  if (cache.get(key)) return { ok: true, dup: true };
+  cache.put(key, '1', 21600);
+
+  var msg = update.message || update.channel_post;
+  if (msg && msg.document) {
+    processMessage(msg);
+    return { ok: true, processed: true };
+  }
+  return { ok: true, skipped: true };
+}
+
+function doPost(e) {
+  try {
+    if (!e || !e.postData || !e.postData.contents) return jsonOutput_({ ok: true });
+    handleUpdate_(JSON.parse(e.postData.contents));
+  } catch (err) {
+    console.error('doPost error (삼킴):', err && err.message);
+    try { sendAdminError('❌ doPost 오류(삼킴): ' + (err && err.message)); } catch (e2) {}
+  }
+  // 항상 200 반환 — 실패해도 텔레그램 무한 재시도 폭주를 막는다(사용자 알림은 processMessage가 담당).
+  return jsonOutput_({ ok: true });
+}
+
+// 원격 관리 엔드포인트. 봇 토큰이 GAS 안에만 있어 웹훅 설정은 GAS 내부에서 실행해야 하므로,
+// setup 액션을 GET으로 노출해 curl로 웹훅 on/off/상태확인을 할 수 있게 한다(키로 보호).
+var WEBHOOK_ADMIN_KEY = 'VH71xEN7Krg7UKtu78EyDVBuTnLeQlI';
+// Cloudflare Worker 프록시 → GAS 전달 시 제시하는 공유 시크릿(?ptoken=).
+var PROXY_SHARED_SECRET = 'UBuAgzeI0vyjyClyAH0PbsY8TZs4VOOh';
+
+function doGet(e) {
+  var p = (e && e.parameter) || {};
+
+  // Cloudflare Worker 프록시가 GET+쿼리로 넘긴 텔레그램 update 처리.
+  // (GAS 웹앱은 POST에 302를 돌려줘 텔레그램이 직접 못 붙으므로 Worker가 GET으로 우회 전달)
+  if (p.update) {
+    if (p.ptoken !== PROXY_SHARED_SECRET) {
+      return jsonOutput_({ ok: false, error: 'bad proxy token' });
+    }
+    try {
+      return jsonOutput_(handleUpdate_(JSON.parse(p.update)));
+    } catch (err) {
+      console.error('proxy update 처리 오류:', err && err.message);
+      try { sendAdminError('❌ proxy update 오류: ' + (err && err.message)); } catch (e2) {}
+      return jsonOutput_({ ok: false, error: String(err && err.message) });
+    }
+  }
+
+  var action = p.setup;
+  if (!action) {
+    return jsonOutput_({ ok: true, service: 'telegram-notion-archiver' });
+  }
+  if (p.key !== WEBHOOK_ADMIN_KEY) {
+    return jsonOutput_({ ok: false, error: 'unauthorized' });
+  }
+  try {
+    if (action === 'enable')  return jsonOutput_(enableWebhookMode(p.url, p.secret));
+    if (action === 'disable') return jsonOutput_(disableWebhookMode());
+    if (action === 'status')  return jsonOutput_(webhookStatus());
+    return jsonOutput_({ ok: false, error: 'unknown action: ' + action });
+  } catch (err) {
+    return jsonOutput_({ ok: false, error: String(err && err.message) });
+  }
+}
+
+function jsonOutput_(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
 // 트리거가 호출하는 엔트리. 절대 uncaught 예외를 던지지 않는다 —
 // GAS는 트리거 실행이 반복 실패하면 트리거를 자동 정지/비활성화하므로,
 // 어떤 오류도 여기서 삼켜(로그+관리자 DM) 트리거 수명을 보호한다.
+// (웹훅 모드에서는 이 트리거가 제거되며, 폴링 복구용으로만 남겨둔다.)
 function pollUpdates() {
   try {
     pollUpdatesOnce();

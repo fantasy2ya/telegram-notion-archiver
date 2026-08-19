@@ -1,0 +1,12 @@
+name = "telegram-notion-webhook"
+main = "src/index.js"
+compatibility_date = "2024-11-01"
+account_id = "01eed9b2f5aa4d95f780521ff928c374"
+
+# GAS 웹앱 /exec URL (공개값 — 시크릿 아님). GAS 재배포로 URL이 바뀌면 여기도 갱신.
+[vars]
+GAS_EXEC_URL = "https://script.google.com/macros/s/AKfycbzrlrVS8Lnm4YuCkrhOBTkh1-IY1a6k5NKioWSdnRGMRMLog62Ri2cJem8bDw_ffnvM/exec"
+
+# 시크릿은 wrangler secret put 으로 주입 (여기에 넣지 않음):
+#   GAS_PROXY_SECRET   — GAS PROXY_SHARED_SECRET 과 동일해야 함
+#   TG_WEBHOOK_SECRET  — 텔레그램 setWebhook secret_token 과 동일해야 함

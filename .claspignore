@@ -1,4 +1,5 @@
 docs/**
+worker/**
 .gitignore
 .claspignore
 *.md

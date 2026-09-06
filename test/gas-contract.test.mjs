@@ -231,3 +231,73 @@ test('webhook setup requires a secret, limits concurrency, and verifies Telegram
   assert.equal(payload.secret_token, 'telegram-webhook-secret');
   assert.equal(calls.length, 2);
 });
+
+test('runtime authentication secrets are read from Script Properties', async () => {
+  const values = {
+    GAS_PROXY_SECRET: 'stored-proxy-secret',
+    WEBHOOK_ADMIN_KEY: 'stored-admin-key',
+  };
+  const gas = await loadGasFiles(['Code.js', 'utils.js'], {
+    PropertiesService: {
+      getScriptProperties() {
+        return { getProperty(key) { return values[key] || null; } };
+      },
+    },
+  });
+
+  assert.equal(gas.getProxySharedSecret_(), 'stored-proxy-secret');
+  assert.equal(gas.isAdminAuthorized_('stored-admin-key'), true);
+  assert.equal(gas.isAdminAuthorized_('wrong-key'), false);
+});
+
+test('admin configuration stores only the approved runtime properties', async () => {
+  const values = { WEBHOOK_ADMIN_KEY: 'current-admin-key' };
+  const writes = [];
+  const scriptProperties = {
+    getProperty(key) { return values[key] || null; },
+    setProperties(next) {
+      writes.push({ ...next });
+      Object.assign(values, next);
+    },
+  };
+  const gas = await loadGasFiles(['Code.js', 'utils.js', 'webhook.js'], {
+    PropertiesService: { getScriptProperties() { return scriptProperties; } },
+  });
+
+  const denied = gas.handleAdminRequest_({ action: 'status', key: 'wrong-key' });
+  const configured = gas.handleAdminRequest_({
+    action: 'configure',
+    key: 'current-admin-key',
+    properties: {
+      WEBHOOK_ADMIN_KEY: 'new-admin-key',
+      GAS_PROXY_SECRET: 'new-proxy-secret',
+      TG_WEBHOOK_SECRET: 'new-telegram-secret',
+      WORKER_WEBHOOK_URL: 'https://telegram-notion-webhook.eyeom40.workers.dev',
+      UNAPPROVED_VALUE: 'must-not-be-written',
+    },
+  });
+
+  assert.equal(denied.ok, false);
+  assert.equal(denied.error, 'unauthorized');
+  assert.equal(configured.ok, true);
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].UNAPPROVED_VALUE, undefined);
+  assert.equal(writes[0].GAS_PROXY_SECRET, 'new-proxy-secret');
+  assert.equal(configured.configured.includes('GAS_PROXY_SECRET'), true);
+  assert.equal(JSON.stringify(configured).includes('new-proxy-secret'), false);
+});
+
+test('deployment workflow publishes a fixed GAS version and runs both test suites', async () => {
+  const workflow = await readFile(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
+  const wrangler = await readFile(new URL('../worker/wrangler.toml', import.meta.url), 'utf8');
+  const code = await readFile(new URL('../Code.js', import.meta.url), 'utf8');
+
+  assert.match(workflow, /workflow_dispatch:/);
+  assert.match(workflow, /npm test --prefix worker/);
+  assert.match(workflow, /node --test test\/gas-contract\.test\.mjs/);
+  assert.match(workflow, /clasp version/);
+  assert.match(workflow, /clasp deploy[^\n]+-i/);
+  assert.match(wrangler, /compatibility_date = "2026-09-06"/);
+  assert.doesNotMatch(code, /var\s+WEBHOOK_ADMIN_KEY\s*=/);
+  assert.doesNotMatch(code, /var\s+PROXY_SHARED_SECRET\s*=/);
+});

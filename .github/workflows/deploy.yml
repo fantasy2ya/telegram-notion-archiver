@@ -3,6 +3,7 @@ name: Deploy to Google Apps Script
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
   deploy:
@@ -14,6 +15,11 @@ jobs:
         uses: actions/setup-node@v4.4.0
         with:
           node-version: '24'
+
+      - name: Run contract tests
+        run: |
+          node --test test/gas-contract.test.mjs
+          npm test --prefix worker
 
       - name: Install clasp
         run: npm install -g @google/clasp
@@ -41,5 +47,22 @@ jobs:
           SCRIPT_ID: ${{ secrets.SCRIPT_ID }}
         run: printf '{"scriptId":"%s","rootDir":""}' "$SCRIPT_ID" > .clasp.json
 
-      - name: Push to GAS
-        run: clasp push --force
+      - name: Push and update fixed GAS deployment
+        run: |
+          clasp push --force
+          VERSION_OUTPUT="$(clasp version "${GITHUB_SHA}")"
+          VERSION_NUMBER="$(printf '%s\n' "$VERSION_OUTPUT" | sed -nE 's/.*version ([0-9]+).*/\1/p' | tail -1)"
+          if [ -z "$VERSION_NUMBER" ]; then
+            echo "Could not parse clasp version output"
+            exit 1
+          fi
+          DEPLOYMENT_ID="$(python3 - <<'PY'
+          import pathlib, re
+          text = pathlib.Path('worker/wrangler.toml').read_text()
+          match = re.search(r'/macros/s/([^/]+)/exec', text)
+          if not match:
+              raise SystemExit('GAS deployment id not found')
+          print(match.group(1))
+          PY
+          )"
+          clasp deploy -i "$DEPLOYMENT_ID" -V "$VERSION_NUMBER" -d "$GITHUB_SHA"

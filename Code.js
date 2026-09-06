@@ -61,7 +61,11 @@ function doPost(e) {
     if (!e || !e.postData || !e.postData.contents) {
       return jsonOutput_({ ok: true, status: 'skipped', reason: 'empty_body' });
     }
-    return jsonOutput_(handleUpdate_(JSON.parse(e.postData.contents)));
+    var payload = JSON.parse(e.postData.contents);
+    if (payload && payload._admin) {
+      return jsonOutput_(handleAdminRequest_(payload._admin));
+    }
+    return jsonOutput_(handleUpdate_(payload));
   } catch (err) {
     console.error('doPost error:', err && err.message);
     try { sendAdminError('❌ doPost 오류: ' + (err && err.message)); } catch (e2) {}
@@ -69,11 +73,57 @@ function doPost(e) {
   }
 }
 
-// 원격 관리 엔드포인트. 봇 토큰이 GAS 안에만 있어 웹훅 설정은 GAS 내부에서 실행해야 하므로,
-// setup 액션을 GET으로 노출해 curl로 웹훅 on/off/상태확인을 할 수 있게 한다(키로 보호).
-var WEBHOOK_ADMIN_KEY = 'VH71xEN7Krg7UKtu78EyDVBuTnLeQlI';
-// Cloudflare Worker 프록시 → GAS 전달 시 제시하는 공유 시크릿(?ptoken=).
-var PROXY_SHARED_SECRET = 'UBuAgzeI0vyjyClyAH0PbsY8TZs4VOOh';
+function secureEquals_(left, right) {
+  var a = String(left || '');
+  var b = String(right || '');
+  var mismatch = a.length ^ b.length;
+  var length = Math.max(a.length, b.length);
+  for (var i = 0; i < length; i += 1) {
+    mismatch |= (a.charCodeAt(i % (a.length || 1)) || 0) ^
+      (b.charCodeAt(i % (b.length || 1)) || 0);
+  }
+  return mismatch === 0 && a.length > 0;
+}
+
+function getProxySharedSecret_() {
+  return getConfig('GAS_PROXY_SECRET');
+}
+
+function isAdminAuthorized_(key) {
+  var expected = PropertiesService.getScriptProperties().getProperty('WEBHOOK_ADMIN_KEY');
+  return secureEquals_(key, expected);
+}
+
+function handleAdminRequest_(request) {
+  request = request || {};
+  if (!isAdminAuthorized_(request.key)) {
+    return { ok: false, error: 'unauthorized' };
+  }
+
+  var action = request.action;
+  if (action === 'status') return webhookStatus();
+  if (action === 'disable') return disableWebhookMode();
+  if (action === 'enable') {
+    var props = PropertiesService.getScriptProperties();
+    var workerUrl = request.url || props.getProperty('WORKER_WEBHOOK_URL');
+    var telegramSecret = request.telegramSecret || props.getProperty('TG_WEBHOOK_SECRET');
+    return enableWebhookMode(workerUrl, telegramSecret);
+  }
+  if (action === 'configure') {
+    var allowed = ['WEBHOOK_ADMIN_KEY', 'GAS_PROXY_SECRET', 'TG_WEBHOOK_SECRET', 'WORKER_WEBHOOK_URL'];
+    var incoming = request.properties || {};
+    var updates = {};
+    allowed.forEach(function(name) {
+      var value = String(incoming[name] || '').trim();
+      if (value) updates[name] = value;
+    });
+    if (updates.WORKER_WEBHOOK_URL) validateWebhookUrl_(updates.WORKER_WEBHOOK_URL);
+    if (!Object.keys(updates).length) throw new Error('설정할 값이 없습니다.');
+    PropertiesService.getScriptProperties().setProperties(updates, false);
+    return { ok: true, configured: Object.keys(updates).sort() };
+  }
+  return { ok: false, error: 'unknown action: ' + action };
+}
 
 function doGet(e) {
   var p = (e && e.parameter) || {};
@@ -81,10 +131,10 @@ function doGet(e) {
   // Cloudflare Worker 프록시가 GET+쿼리로 넘긴 텔레그램 update 처리.
   // (GAS 웹앱은 POST에 302를 돌려줘 텔레그램이 직접 못 붙으므로 Worker가 GET으로 우회 전달)
   if (p.update) {
-    if (p.ptoken !== PROXY_SHARED_SECRET) {
-      return jsonOutput_({ ok: false, error: 'bad proxy token' });
-    }
     try {
+      if (!secureEquals_(p.ptoken, getProxySharedSecret_())) {
+        return jsonOutput_({ ok: false, error: 'bad proxy token' });
+      }
       return jsonOutput_(handleUpdate_(JSON.parse(p.update)));
     } catch (err) {
       console.error('proxy update 처리 오류:', err && err.message);
@@ -93,21 +143,7 @@ function doGet(e) {
     }
   }
 
-  var action = p.setup;
-  if (!action) {
-    return jsonOutput_({ ok: true, service: 'telegram-notion-archiver' });
-  }
-  if (p.key !== WEBHOOK_ADMIN_KEY) {
-    return jsonOutput_({ ok: false, error: 'unauthorized' });
-  }
-  try {
-    if (action === 'enable')  return jsonOutput_(enableWebhookMode(p.url, p.secret));
-    if (action === 'disable') return jsonOutput_(disableWebhookMode());
-    if (action === 'status')  return jsonOutput_(webhookStatus());
-    return jsonOutput_({ ok: false, error: 'unknown action: ' + action });
-  } catch (err) {
-    return jsonOutput_({ ok: false, error: String(err && err.message) });
-  }
+  return jsonOutput_({ ok: true, service: 'telegram-notion-archiver' });
 }
 
 function jsonOutput_(obj) {

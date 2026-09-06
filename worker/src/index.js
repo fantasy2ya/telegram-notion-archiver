@@ -34,16 +34,26 @@ export function createWorker(fetchImpl) {
       try {
         const gasResponse = await fetchImpl(url, { method: 'GET', redirect: 'follow' });
         if (!gasResponse.ok) {
+          console.error('GAS delivery HTTP failure', { updateId: update.update_id, status: gasResponse.status });
           return json({ ok: false, retry: true }, 503);
         }
 
         const result = await gasResponse.json();
         if (!result || result.ok !== true || result.retry === true) {
+          console.error('GAS requested retry', {
+            updateId: update.update_id,
+            reason: result && result.reason ? result.reason : 'invalid_response',
+          });
           return json({ ok: false, retry: true }, 503);
         }
 
+        console.log('Telegram update terminal', { updateId: update.update_id, status: result.status || 'processed' });
         return json({ ok: true, status: result.status || 'processed' });
-      } catch (_) {
+      } catch (error) {
+        console.error('GAS delivery exception', {
+          updateId: update.update_id,
+          message: error instanceof Error ? error.message : String(error),
+        });
         return json({ ok: false, retry: true }, 503);
       }
     },

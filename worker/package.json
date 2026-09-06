@@ -1,0 +1,8 @@
+{
+  "name": "telegram-notion-webhook",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}

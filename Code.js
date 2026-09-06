@@ -258,7 +258,7 @@ function processMessage(msg) {
       ? '❌ 파일이 너무 큽니다: ' + err.message.replace('FILE_TOO_LARGE:', '')
       : '❌ Telegram 파일 다운로드 실패: ' + err.message;
     notifyFailure(chatId, msgId, msgText);
-    return { status: 'retry', reason: 'telegram_download_failed' };
+    return failureOutcome_('telegram_download_failed', err);
   }
 
   try {
@@ -268,7 +268,7 @@ function processMessage(msg) {
   } catch (err) {
     console.error('Notion FAIL:', err.message);
     notifyFailure(chatId, msgId, '❌ Notion 업로드 실패: ' + err.message);
-    return { status: 'retry', reason: 'notion_upload_failed' };
+    return failureOutcome_('notion_upload_failed', err);
   }
 
   try {
@@ -277,6 +277,13 @@ function processMessage(msg) {
     sendAdminError('⚠️ 리액션 추가 실패 (Notion 저장은 완료됨): ' + err.message);
   }
   return { status: 'processed' };
+}
+
+function failureOutcome_(reason, error) {
+  if (isRetryableError_(error)) {
+    return { status: 'retry', reason: reason };
+  }
+  return { status: 'skipped', reason: reason + '_permanent' };
 }
 
 function buildSender(from) {

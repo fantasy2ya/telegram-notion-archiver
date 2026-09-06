@@ -3,24 +3,68 @@
 
 var TG_BASE_ = 'https://api.telegram.org';
 
-// 웹훅 켜기: 이 웹앱의 /exec URL로 setWebhook + 폴링 트리거 제거.
-// ScriptApp.getService().getUrl()이 배포된 웹앱 URL을 돌려주므로 URL을 하드코딩하지 않는다.
-function enableWebhookMode(urlOverride, secretToken) {
-  // url은 웹훅을 붙일 대상. Cloudflare Worker 프록시 URL을 넘긴다(GAS 직접 URL은 302로 불가).
-  // secretToken을 주면 텔레그램이 X-Telegram-Bot-Api-Secret-Token 헤더로 실어 보내 Worker가 검증한다.
-  var url = urlOverride || ScriptApp.getService().getUrl();
-  if (!url) {
-    throw new Error('웹훅 URL 없음 — Worker URL을 url 파라미터로 전달 필요');
+function validateWebhookUrl_(url) {
+  var normalized = String(url || '').trim().replace(/\/+$/, '');
+  if (!normalized) {
+    throw new Error('Worker 웹훅 URL이 필요합니다.');
   }
+  var match = normalized.match(/^https:\/\/([^\/?#]+)(?:[\/?#]|$)/i);
+  if (!match) {
+    throw new Error('웹훅 URL은 HTTPS여야 합니다.');
+  }
+  var hostname = match[1].split(':')[0].toLowerCase();
+  if (hostname === 'script.google.com' || /\.script\.google\.com$/.test(hostname)) {
+    throw new Error('GAS URL은 Telegram 웹훅으로 등록할 수 없습니다. Worker URL을 사용하세요.');
+  }
+  return normalized;
+}
+
+function parseTelegramResponse_(response, operation) {
+  var status = response.getResponseCode();
+  var text = response.getContentText();
+  var data;
+  try {
+    data = JSON.parse(text);
+  } catch (error) {
+    throw makeApiError_('Telegram ' + operation, status, text, getResponseHeader_(response, 'Retry-After'));
+  }
+  if (status < 200 || status >= 300 || !data.ok) {
+    throw makeApiError_(
+      'Telegram ' + operation,
+      status,
+      data.description || text,
+      getResponseHeader_(response, 'Retry-After')
+    );
+  }
+  return data;
+}
+
+// 웹훅 켜기: 검증된 Worker URL로 setWebhook한 뒤 Telegram 상태를 재확인한다.
+function enableWebhookMode(urlOverride, secretToken) {
+  var url = validateWebhookUrl_(urlOverride);
+  if (!secretToken) throw new Error('Telegram webhook secret이 필요합니다.');
+
   var token = getConfig('TELEGRAM_TOKEN');
-  var api = TG_BASE_ + '/bot' + token + '/setWebhook' +
-    '?url=' + encodeURIComponent(url) +
-    '&max_connections=5' +
-    '&allowed_updates=' + encodeURIComponent('["message","channel_post"]');
-  if (secretToken) api += '&secret_token=' + encodeURIComponent(secretToken);
-  var res = UrlFetchApp.fetch(api, { muteHttpExceptions: true });
-  var data = JSON.parse(res.getContentText());
-  if (!data.ok) throw new Error('setWebhook 실패: ' + data.description);
+  var res = UrlFetchApp.fetch(TG_BASE_ + '/bot' + token + '/setWebhook', {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify({
+      url: url,
+      secret_token: secretToken,
+      max_connections: 1,
+      allowed_updates: ['message', 'channel_post']
+    }),
+    muteHttpExceptions: true
+  });
+  parseTelegramResponse_(res, 'setWebhook');
+
+  var infoRes = UrlFetchApp.fetch(TG_BASE_ + '/bot' + token + '/getWebhookInfo', {
+    muteHttpExceptions: true
+  });
+  var info = parseTelegramResponse_(infoRes, 'getWebhookInfo').result || {};
+  if (info.url !== url) {
+    throw new Error('Telegram 웹훅 검증 실패: 등록 URL이 요청 URL과 다릅니다.');
+  }
 
   var removed = [];
   ScriptApp.getProjectTriggers().forEach(function (t) {
@@ -38,8 +82,7 @@ function enableWebhookMode(urlOverride, secretToken) {
 function disableWebhookMode() {
   var token = getConfig('TELEGRAM_TOKEN');
   var res = UrlFetchApp.fetch(TG_BASE_ + '/bot' + token + '/deleteWebhook', { muteHttpExceptions: true });
-  var data = JSON.parse(res.getContentText());
-  if (!data.ok) throw new Error('deleteWebhook 실패: ' + data.description);
+  parseTelegramResponse_(res, 'deleteWebhook');
 
   installTriggers(); // pollUpdates 1분 + watchdog 1시간 재설치
   return { ok: true, mode: 'polling', triggers: describeTriggers() };
@@ -48,8 +91,9 @@ function disableWebhookMode() {
 // 현재 상태 조회(읽기 전용): 웹훅 등록 여부/대기수/마지막 오류 + 트리거 + offset.
 function webhookStatus() {
   var token = getConfig('TELEGRAM_TOKEN');
-  var wh = JSON.parse(
-    UrlFetchApp.fetch(TG_BASE_ + '/bot' + token + '/getWebhookInfo', { muteHttpExceptions: true }).getContentText()
+  var wh = parseTelegramResponse_(
+    UrlFetchApp.fetch(TG_BASE_ + '/bot' + token + '/getWebhookInfo', { muteHttpExceptions: true }),
+    'getWebhookInfo'
   );
   return {
     ok: true,

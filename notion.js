@@ -12,6 +12,28 @@ function notionHeaders() {
   };
 }
 
+function parseNotionResponse_(response, operation) {
+  const status = response.getResponseCode();
+  const text = response.getContentText();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch (parseError) {
+    const error = makeApiError_('Notion ' + operation, status, text, getResponseHeader_(response, 'Retry-After'));
+    if (status >= 200 && status < 300) error.retryable = true;
+    throw error;
+  }
+  if (status < 200 || status >= 300 || data.object === 'error') {
+    throw makeApiError_(
+      'Notion ' + operation,
+      status,
+      data.message || text,
+      getResponseHeader_(response, 'Retry-After')
+    );
+  }
+  return data;
+}
+
 function createFileUpload(filename, mimeType) {
   const res = UrlFetchApp.fetch(NOTION_API + '/file_uploads', {
     method: 'post',
@@ -19,10 +41,8 @@ function createFileUpload(filename, mimeType) {
     payload: JSON.stringify({ filename: filename, content_type: mimeType }),
     muteHttpExceptions: true
   });
-  const data = JSON.parse(res.getContentText());
-  if (!data.id || data.object === 'error') {
-    throw new Error('createFileUpload failed: ' + res.getContentText());
-  }
+  const data = parseNotionResponse_(res, 'createFileUpload');
+  if (!data.id) throw makeApiError_('Notion createFileUpload', 0, 'missing upload id');
   return { id: data.id, uploadUrl: data.upload_url };
 }
 
@@ -36,10 +56,7 @@ function sendFileUpload(fileUploadId, blob) {
     payload: { 'file': blob },
     muteHttpExceptions: true
   });
-  if (res.getResponseCode() < 200 || res.getResponseCode() >= 300) {
-    throw new Error('sendFileUpload failed (' + res.getResponseCode() + '): ' + res.getContentText());
-  }
-  return JSON.parse(res.getContentText());
+  return parseNotionResponse_(res, 'sendFileUpload');
 }
 
 // DB의 실제 속성명→타입 맵을 반환. 존재하지 않는 속성에 쓰면 Notion이
@@ -50,10 +67,8 @@ function getNotionDbProperties(dbId) {
     headers: notionHeaders(),
     muteHttpExceptions: true
   });
-  const data = JSON.parse(res.getContentText());
-  if (data.object === 'error' || !data.properties) {
-    throw new Error('getNotionDbProperties failed: ' + res.getContentText());
-  }
+  const data = parseNotionResponse_(res, 'getNotionDbProperties');
+  if (!data.properties) throw makeApiError_('Notion getNotionDbProperties', 0, 'missing properties');
   const map = {};
   Object.keys(data.properties).forEach(function(name) {
     map[name] = data.properties[name].type;
@@ -118,9 +133,7 @@ function createNotionPage(meta, fileUploadId) {
     muteHttpExceptions: true
   });
 
-  const data = JSON.parse(res.getContentText());
-  if (!data.id || data.object === 'error') {
-    throw new Error('createNotionPage failed: ' + res.getContentText());
-  }
+  const data = parseNotionResponse_(res, 'createNotionPage');
+  if (!data.id) throw makeApiError_('Notion createNotionPage', 0, 'missing page id');
   return data;
 }

@@ -1,6 +1,28 @@
 const TELEGRAM_BASE = 'https://api.telegram.org';
 const MAX_FILE_BYTES = 50 * 1024 * 1024; // 50MB
 
+function parseTelegramApiResponse_(response, operation) {
+  const status = response.getResponseCode();
+  const text = response.getContentText();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch (parseError) {
+    const error = makeApiError_('Telegram ' + operation, status, text, getResponseHeader_(response, 'Retry-After'));
+    if (status >= 200 && status < 300) error.retryable = true;
+    throw error;
+  }
+  if (status < 200 || status >= 300 || !data.ok) {
+    throw makeApiError_(
+      'Telegram ' + operation,
+      status,
+      data.description || text,
+      getResponseHeader_(response, 'Retry-After')
+    );
+  }
+  return data;
+}
+
 function downloadTelegramFile(fileId) {
   const token = getConfig('TELEGRAM_TOKEN');
 
@@ -9,21 +31,26 @@ function downloadTelegramFile(fileId) {
     TELEGRAM_BASE + '/bot' + token + '/getFile?file_id=' + fileId,
     { muteHttpExceptions: true }
   );
-  const getFileData = JSON.parse(getFileRes.getContentText());
-  if (!getFileData.ok) {
-    throw new Error('getFile failed: ' + getFileData.description);
-  }
+  const getFileData = parseTelegramApiResponse_(getFileRes, 'getFile');
 
   const file = getFileData.result;
   if (file.file_size && file.file_size > MAX_FILE_BYTES) {
-    throw new Error('FILE_TOO_LARGE:' + file.file_name);
+    const error = new Error('FILE_TOO_LARGE:' + file.file_name);
+    error.status = 413;
+    error.retryable = false;
+    throw error;
   }
 
   // 2단계: 파일 바이트 다운로드
   const fileUrl = TELEGRAM_BASE + '/file/bot' + token + '/' + file.file_path;
   const fileRes = UrlFetchApp.fetch(fileUrl, { muteHttpExceptions: true });
   if (fileRes.getResponseCode() !== 200) {
-    throw new Error('File download failed: HTTP ' + fileRes.getResponseCode());
+    throw makeApiError_(
+      'Telegram file download',
+      fileRes.getResponseCode(),
+      fileRes.getContentText(),
+      getResponseHeader_(fileRes, 'Retry-After')
+    );
   }
   return fileRes.getBlob();
 }
@@ -43,10 +70,7 @@ function sendReaction(chatId, messageId) {
       muteHttpExceptions: true
     }
   );
-  const data = JSON.parse(res.getContentText());
-  if (!data.ok) {
-    throw new Error('setMessageReaction failed: ' + data.description);
-  }
+  parseTelegramApiResponse_(res, 'setMessageReaction');
 }
 
 function sendThumbsDown(chatId, messageId) {

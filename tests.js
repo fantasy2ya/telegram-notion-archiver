@@ -81,6 +81,34 @@ function testSanitizeSelectName() {
   console.log(passed + '/' + cases.length + ' passed');
 }
 
+function testUpdateOutcomeContract() {
+  var completed = [];
+  var retryResult = handleUpdateCore_({
+    update_id: 9001,
+    message: { document: { file_id: 'test-file' } }
+  }, {
+    isCompleted: function () { return false; },
+    markCompleted: function (id) { completed.push(id); },
+    processMessage: function () { return { status: 'retry', reason: 'test_failure' }; }
+  });
+  if (retryResult.retry !== true || completed.length !== 0) {
+    throw new Error('재시도 업데이트가 완료 처리됨: ' + JSON.stringify(retryResult));
+  }
+
+  var processedResult = handleUpdateCore_({
+    update_id: 9002,
+    message: { document: { file_id: 'test-file' } }
+  }, {
+    isCompleted: function () { return false; },
+    markCompleted: function (id) { completed.push(id); },
+    processMessage: function () { return { status: 'processed' }; }
+  });
+  if (processedResult.status !== 'processed' || completed[0] !== 9002) {
+    throw new Error('성공 업데이트가 완료 처리되지 않음: ' + JSON.stringify(processedResult));
+  }
+  console.log('✅ update outcome contract passed');
+}
+
 function testSendAdminError() {
   // 실제로 관리자 채팅에 테스트 메시지가 전송됨
   sendAdminError('🧪 테스트: sendAdminError 정상 작동 확인');

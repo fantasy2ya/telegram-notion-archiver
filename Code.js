@@ -3,34 +3,70 @@
 // 무료 GAS 90분/일 트리거 쿼터 문제를 근본적으로 회피한다.
 // 웹앱은 반드시 access=ANYONE_ANONYMOUS로 배포되어야 함(텔레그램은 구글 미로그인).
 // 하나의 텔레그램 update를 처리한다. doPost(직접 POST)와 doGet(프록시 GET+쿼리) 공용.
-function handleUpdate_(update) {
-  if (!update) return { ok: true };
+function handleUpdateCore_(update, deps) {
+  if (!update || !Number.isSafeInteger(update.update_id)) {
+    return { ok: true, status: 'skipped', reason: 'invalid_update' };
+  }
 
-  // 중복 배달 방지: 응답이 느리면 텔레그램/프록시가 같은 update를 재전송한다.
-  // 처리 시작 전에 update_id를 6시간 캐시에 기록해 두 번 처리하지 않는다.
-  var cache = CacheService.getScriptCache();
-  var key = 'tgupd_' + update.update_id;
-  if (cache.get(key)) return { ok: true, dup: true };
-  cache.put(key, '1', 21600);
+  if (deps.isCompleted(update.update_id)) {
+    return { ok: true, status: 'duplicate' };
+  }
 
   var msg = update.message || update.channel_post;
-  if (msg && msg.document) {
-    processMessage(msg);
-    return { ok: true, processed: true };
+  var outcome = msg && msg.document
+    ? deps.processMessage(msg, update)
+    : { status: 'skipped', reason: 'not_document' };
+
+  if (!outcome || outcome.status === 'retry') {
+    return {
+      ok: false,
+      retry: true,
+      status: 'retry',
+      reason: outcome && outcome.reason ? outcome.reason : 'unknown_failure'
+    };
   }
-  return { ok: true, skipped: true };
+
+  if (outcome.status !== 'processed' && outcome.status !== 'skipped') {
+    return { ok: false, retry: true, status: 'retry', reason: 'invalid_outcome' };
+  }
+
+  deps.markCompleted(update.update_id);
+  return { ok: true, status: outcome.status, reason: outcome.reason || '' };
+}
+
+function handleUpdate_(update) {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(1000)) {
+    return { ok: false, retry: true, status: 'retry', reason: 'busy' };
+  }
+
+  try {
+    var cache = CacheService.getScriptCache();
+    return handleUpdateCore_(update, {
+      isCompleted: function (updateId) {
+        return !!cache.get('tgupd_' + updateId);
+      },
+      markCompleted: function (updateId) {
+        cache.put('tgupd_' + updateId, '1', 21600);
+      },
+      processMessage: processMessage
+    });
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function doPost(e) {
   try {
-    if (!e || !e.postData || !e.postData.contents) return jsonOutput_({ ok: true });
-    handleUpdate_(JSON.parse(e.postData.contents));
+    if (!e || !e.postData || !e.postData.contents) {
+      return jsonOutput_({ ok: true, status: 'skipped', reason: 'empty_body' });
+    }
+    return jsonOutput_(handleUpdate_(JSON.parse(e.postData.contents)));
   } catch (err) {
-    console.error('doPost error (삼킴):', err && err.message);
-    try { sendAdminError('❌ doPost 오류(삼킴): ' + (err && err.message)); } catch (e2) {}
+    console.error('doPost error:', err && err.message);
+    try { sendAdminError('❌ doPost 오류: ' + (err && err.message)); } catch (e2) {}
+    return jsonOutput_({ ok: false, retry: true, status: 'retry', reason: 'doPost_error' });
   }
-  // 항상 200 반환 — 실패해도 텔레그램 무한 재시도 폭주를 막는다(사용자 알림은 processMessage가 담당).
-  return jsonOutput_({ ok: true });
 }
 
 // 원격 관리 엔드포인트. 봇 토큰이 GAS 안에만 있어 웹훅 설정은 GAS 내부에서 실행해야 하므로,
@@ -109,21 +145,34 @@ function pollUpdatesOnce() {
   }
 
   const updates = data.result;
-  if (updates.length === 0) return;
+  if (updates.length === 0) return { ok: true, processed: 0 };
 
-  updates.forEach(function(update) {
-    const msg = update.message || update.channel_post;
-    if (msg && msg.document) {
-      try {
-        processMessage(msg);
-      } catch (err) {
-        sendAdminError('❌ update ' + update.update_id + ' 처리 실패: ' + err.message);
-      }
+  return processPollingBatch_(updates, {
+    processUpdate: handleUpdate_,
+    commitOffset: function (nextOffset) {
+      props.setProperty('TG_OFFSET', String(nextOffset));
     }
   });
+}
 
-  const lastId = updates[updates.length - 1].update_id;
-  props.setProperty('TG_OFFSET', String(lastId + 1));
+function processPollingBatch_(updates, deps) {
+  var processed = 0;
+  for (var i = 0; i < updates.length; i++) {
+    var update = updates[i];
+    var result = deps.processUpdate(update);
+    if (!result || result.retry === true || result.ok !== true) {
+      return {
+        ok: false,
+        retry: true,
+        status: 'retry',
+        failedUpdateId: update.update_id,
+        processed: processed
+      };
+    }
+    deps.commitOffset(update.update_id + 1);
+    processed++;
+  }
+  return { ok: true, processed: processed };
 }
 
 // === 트리거 자가복구 ==========================================================
@@ -196,7 +245,7 @@ function processMessage(msg) {
     const mb = (fileSize / 1024 / 1024).toFixed(2);
     console.error('SIZE LIMIT:', filename, mb + 'MB');
     notifyFailure(chatId, msgId, '❌ Notion 무료 플랜 5MB 초과로 업로드 불가 (' + mb + 'MB): ' + filename);
-    return;
+    return { status: 'skipped', reason: 'notion_size_limit' };
   }
 
   let blob;
@@ -209,7 +258,7 @@ function processMessage(msg) {
       ? '❌ 파일이 너무 큽니다: ' + err.message.replace('FILE_TOO_LARGE:', '')
       : '❌ Telegram 파일 다운로드 실패: ' + err.message;
     notifyFailure(chatId, msgId, msgText);
-    return;
+    return { status: 'retry', reason: 'telegram_download_failed' };
   }
 
   try {
@@ -219,7 +268,7 @@ function processMessage(msg) {
   } catch (err) {
     console.error('Notion FAIL:', err.message);
     notifyFailure(chatId, msgId, '❌ Notion 업로드 실패: ' + err.message);
-    return;
+    return { status: 'retry', reason: 'notion_upload_failed' };
   }
 
   try {
@@ -227,6 +276,7 @@ function processMessage(msg) {
   } catch (err) {
     sendAdminError('⚠️ 리액션 추가 실패 (Notion 저장은 완료됨): ' + err.message);
   }
+  return { status: 'processed' };
 }
 
 function buildSender(from) {
